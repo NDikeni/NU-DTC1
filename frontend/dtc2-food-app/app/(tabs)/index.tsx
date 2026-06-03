@@ -9,12 +9,27 @@ import {
   Animated,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
+import * as Notifications from "expo-notifications";
 
 const API_URL = "http://10.105.51.175:5000";
 const USERNAME = "jeongwoo";
+
+Notifications.setNotificationHandler({
+  handleNotification: async () =>
+    ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    } as Notifications.NotificationBehavior),
+});
+
+const STARTUP_NOTIFICATION_ID = "nu-dining-startup-notification";
+const NOTIFICATION_CHANNEL_ID = "default";
 
 type MealPeriod = "BREAKFAST" | "LUNCH" | "DINNER";
 
@@ -346,6 +361,78 @@ const fillerMeals: Record<DiningHall, Record<MealPeriod, FoodItem[]>> = {
   },
 };
 
+async function requestNotificationPermissionOnce() {
+  const currentPermissions = await Notifications.getPermissionsAsync();
+
+  if (currentPermissions.granted || currentPermissions.status === "granted") {
+    return true;
+  }
+
+  const requestedPermissions = await Notifications.requestPermissionsAsync();
+
+  return requestedPermissions.granted || requestedPermissions.status === "granted";
+}
+
+async function configureAndroidNotificationChannel() {
+  if (Platform.OS !== "android") {
+    return;
+  }
+
+  await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNEL_ID, {
+    name: "Default",
+    importance: Notifications.AndroidImportance.DEFAULT,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: "#7c3aed",
+  });
+}
+
+function getRandomItem<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function getRandomTeriyakiChickenNotification() {
+  const randomDiningHall = getRandomItem(diningHalls);
+  const randomMealPeriod = getRandomItem([
+    "BREAKFAST",
+    "LUNCH",
+    "DINNER",
+  ] as MealPeriod[]);
+
+  return {
+    title: "Teriyaki Chicken is available!",
+    body: `Teriyaki Chicken is available at ${
+      randomDiningHall.displayName
+    } for ${mealPeriodLabels[randomMealPeriod]}.`,
+  };
+}
+
+async function sendStartupNotificationOnce() {
+  const hasPermission = await requestNotificationPermissionOnce();
+
+  if (!hasPermission) {
+    console.log("Notification permission was not granted.");
+    return;
+  }
+
+  await configureAndroidNotificationChannel();
+
+  await Notifications.dismissNotificationAsync(STARTUP_NOTIFICATION_ID).catch(
+    () => {}
+  );
+
+  const startupNotification = getRandomTeriyakiChickenNotification();
+
+  await Notifications.scheduleNotificationAsync({
+    identifier: STARTUP_NOTIFICATION_ID,
+    content: {
+      title: startupNotification.title,
+      body: startupNotification.body,
+      sound: true,
+    },
+    trigger: null,
+  });
+}
+
 export default function HomeScreen() {
   const [showFavorites, setShowFavorites] = useState(false);
   const [openHall, setOpenHall] = useState<DiningHall | null>(null);
@@ -365,6 +452,7 @@ export default function HomeScreen() {
   );
 
   const slideAnim = useRef(new Animated.Value(0)).current;
+  const startupNotificationShown = useRef(false);
 
   const normalizeFavorite = (favorite: any): FoodItem => {
     return {
@@ -489,6 +577,18 @@ export default function HomeScreen() {
       }
     }
   };
+
+  useEffect(() => {
+    if (startupNotificationShown.current) {
+      return;
+    }
+
+    startupNotificationShown.current = true;
+
+    sendStartupNotificationOnce().catch((err) => {
+      console.log("sendStartupNotificationOnce error:", err);
+    });
+  }, []);
 
   useEffect(() => {
     refreshBackendData(true);

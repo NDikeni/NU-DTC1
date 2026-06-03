@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import boto3
 import json
+import os 
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -24,11 +25,21 @@ VALID_DINING_HALLS = {
 }
 
 
-def get_s3_config():
-  config_file = "config.ini"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.ini")
 
+def get_config():
   configur = ConfigParser()
-  configur.read(config_file)
+  files_read = configur.read(CONFIG_PATH)
+
+  if len(files_read) == 0:
+    raise Exception(f"config.ini not found at {CONFIG_PATH}")
+
+  return configur
+
+
+def get_s3_config():
+  configur = get_config()
 
   bucket_name = configur.get("s3", "bucket_name")
   region = configur.get("s3", "region")
@@ -818,9 +829,17 @@ def api_reset_database():
     }), 500
     
     
+
 def upload_image_to_s3(image_file):
   try:
+    
     bucket_name, region = get_s3_config()
+
+    print("---- S3 UPLOAD DEBUG ----")
+    print("bucket:", bucket_name)
+    print("region:", region)
+    print("filename:", image_file.filename)
+    print("content_type:", image_file.content_type)
 
     original_filename = secure_filename(image_file.filename)
 
@@ -830,22 +849,36 @@ def upload_image_to_s3(image_file):
     extension = original_filename.rsplit(".", 1)[-1].lower()
 
     if extension not in ALLOWED_IMAGE_EXTENSIONS:
-      return None, "invalid image type"
+      return None, f"invalid image type: {extension}"
 
     object_key = f"food-images/{uuid.uuid4()}.{extension}"
 
     s3_client = boto3.client("s3", region_name=region)
 
+    image_file.stream.seek(0)
+
     s3_client.upload_fileobj(
-      image_file,
+      image_file.stream,
       bucket_name,
       object_key,
       ExtraArgs={
-        "ContentType": image_file.content_type,
+        "ContentType": image_file.content_type or f"image/{extension}",
       }
     )
 
+    print("uploaded object_key:", object_key)
+    print("-------------------------")
+
     return object_key, None
+
+  except NoCredentialsError:
+    print("**ERROR in upload_image_to_s3(): missing AWS credentials")
+    return None, "missing AWS credentials"
+
+  except ClientError as err:
+    print("**AWS ClientError in upload_image_to_s3():")
+    print(err)
+    return None, str(err)
 
   except Exception as err:
     print("**ERROR in upload_image_to_s3():")
@@ -940,8 +973,39 @@ def api_add_food_with_image():
     return jsonify({
       "error": str(err)
     }), 500
-    
-    
+
+
+@app.route("/debug/s3", methods=["GET"])
+def debug_s3_connection():
+  try:
+    print("RUNNING UPDATED DEBUG S3 ROUTE")
+
+    bucket_name, region = get_s3_config()
+
+    print("bucket_name:", bucket_name)
+    print("region:", region)
+
+    s3_client = boto3.client("s3", region_name=region)
+
+    response = s3_client.head_bucket(Bucket=bucket_name)
+
+    return jsonify({
+      "message": "S3 connection successful",
+      "bucket_name": bucket_name,
+      "region": region,
+      "response": str(response)
+    }), 200
+
+  except Exception as err:
+    print("**ERROR in debug_s3_connection():")
+    print(type(err))
+    print(str(err))
+
+    return jsonify({
+      "error_type": type(err).__name__,
+      "error": str(err)
+    }), 500
+
 if __name__ == "__main__":
   app.run(
     host="0.0.0.0",
